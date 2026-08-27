@@ -1,0 +1,16 @@
+# ── 공통 ──────────────────────────────────────────
+opencv-python>=4.8
+numpy>=1.24
+
+# ── 검출 (없어도 --no-detect 로 색 로직은 동작) ────
+ultralytics>=8.3          # YOLO + ByteTrack 내장
+
+# ── Pi 5 전용 ─────────────────────────────────────
+# picamera2 는 pip 말고 apt 로 설치할 것:
+#   sudo apt install -y python3-picamera2 python3-libcamera
+# smbus2 는 BH1750 조도센서 쓸 때만 필요 (없으면 gain fallback 동작)
+smbus2>=0.4 ; platform_machine == "aarch64"
+
+# ── TTS ───────────────────────────────────────────
+# espeak 백엔드:  sudo apt install -y espeak-ng
+# wav 백엔드   :  alsa-utils(aplay) 기본 포함
