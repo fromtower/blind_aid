@@ -123,6 +123,36 @@ check("bbox 0 → inf", estimate_distance("person", 0) == float("inf"))
 check("좌/중/우 분류", (side_of(0.1), side_of(0.5), side_of(0.9))
       == ("left", "front", "right"))
 
+# ── 메인 루프 통합 (버그 재발 방지) ─────────────────────
+print("\n[ 메인 루프 통합 ]")
+
+# ★ SIGNAL_INTERVAL 간격으로 호출해도 표가 누적되어야 한다.
+#   과거 버그: 판정 안 하는 프레임에 voter.update(None) 을 불러서
+#   투표 창이 매번 비워졌고, 신호등이 영원히 확정되지 않았다.
+v4 = SignalVoter()
+res4 = None
+for frame_i in range(1, 31):
+    if frame_i % config.SIGNAL_INTERVAL == 0:          # main.py 와 동일한 조건
+        res4 = v4.update(make_signal_frame("red"), "day")
+check("SIGNAL_INTERVAL 간격에서도 투표 누적",
+      res4 is not None and res4.confident and res4.state == "red",
+      f"state={res4.state} votes={res4.votes}")
+
+# 좌표계: obstacle.box 는 lores(416), 표시 프레임은 main(1920x1080)
+lw, lh = config.LORES_SIZE
+vw, vh = 960, 540
+sx, sy = vw / float(lw), vh / float(lh)
+x_scaled = 400 * sx      # lores 우측 끝 근처의 박스
+check("lores→표시 좌표 스케일 적용", x_scaled > vw * 0.8,
+      f"lores x=400 → 표시 x={x_scaled:.0f} (폭 {vw})")
+
+# 트랙 정리는 나이 기준. 한 프레임 안 보인다고 지우면 안 된다.
+from detect import _Track
+tr = _Track()
+tr.update(5.0, 100.0)
+check("트랙 last_seen 기록", tr.last_seen == 100.0)
+
+
 # ── 결과 ────────────────────────────────────────────────
 ok = sum(_results)
 print(f"\n{'=' * 46}\n  {ok}/{len(_results)} 통과\n{'=' * 46}")
