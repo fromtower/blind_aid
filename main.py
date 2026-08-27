@@ -31,7 +31,7 @@ import config
 from announce import Announcer
 from context import ContextTracker, LuxSensor
 from pavement import PavementTracker, detect_pavement
-from signal_light import SignalVoter
+from signal_light import SignalResult, SignalVoter
 from sources import open_source
 
 
@@ -48,23 +48,36 @@ def obstacle_message(obs) -> tuple[str, str] | None:
     return None
 
 
-def draw_debug(frame, obstacles, pave, sig, profile, fps):
-    vis = frame.copy()
-    h, w = vis.shape[:2]
+def draw_debug(frame, obstacles, pave, sig, profile, fps, view_w=960):
+    """디버그 오버레이.
+
+    ★ 주의: obstacle.box 는 lores(416) 좌표계이고 frame 은 main(1920x1080)이다.
+      스케일을 안 맞추면 박스가 좌상단 구석에 조그맣게 찍힌다.
+    """
+    h, w = frame.shape[:2]
+    scale = view_w / float(w)
+    vis = cv2.resize(frame, (view_w, int(h * scale)), interpolation=cv2.INTER_AREA)
+    vh, vw = vis.shape[:2]
+
+    # lores 좌표 → 표시 좌표 변환 계수
+    lw, lh = config.LORES_SIZE
+    sx, sy = vw / float(lw), vh / float(lh)
 
     for o in obstacles:
-        x1, y1, x2, y2 = (int(v) for v in o.box)
+        x1, y1, x2, y2 = o.box
+        x1, y1 = int(x1 * sx), int(y1 * sy)
+        x2, y2 = int(x2 * sx), int(y2 * sy)
         color = (0, 0, 255) if o.is_danger else (0, 200, 255)
         cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
         cv2.putText(vis, f"{o.label} {o.dist_m:.1f}m {o.speed_mps:+.1f}",
                     (x1, max(14, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
 
-    # 신호등 ROI 박스
+    # 신호등 ROI 박스 / 점자블록 ROI 경계선
     x0, y0, x1_, y1_ = config.SIGNAL_ROI
-    cv2.rectangle(vis, (int(x0 * w), int(y0 * h)), (int(x1_ * w), int(y1_ * h)),
+    cv2.rectangle(vis, (int(x0 * vw), int(y0 * vh)), (int(x1_ * vw), int(y1_ * vh)),
                   (255, 180, 0), 1)
-    cv2.line(vis, (0, int(config.PAVE_ROI_TOP * h)), (w, int(config.PAVE_ROI_TOP * h)),
-             (0, 255, 255), 1)
+    cv2.line(vis, (0, int(config.PAVE_ROI_TOP * vh)),
+             (vw, int(config.PAVE_ROI_TOP * vh)), (0, 255, 255), 1)
 
     lines = [
         f"FPS {fps:5.1f}   profile={profile}",
@@ -113,6 +126,7 @@ def main():
     frame_i = 0
     fps, t_prev = 0.0, time.monotonic()
     last_profile = None
+    sig = SignalResult("unknown", False, False, 0)
 
     try:
         for main_f, lores_f, meta in src:
@@ -130,9 +144,11 @@ def main():
                 last_profile = profile
 
             # ── 신호등 (MAIN 원본 크롭, N프레임에 1회) ──
-            do_sig = (frame_i % config.SIGNAL_INTERVAL == 0)
-            sig = voter.update(main_f if do_sig else None, profile)
-            if do_sig:
+            # ★ voter.update 를 매 프레임 호출하면 안 된다.
+            #   None 을 넘기면 투표 창이 비워져서 표가 절대 누적되지 않는다.
+            #   판정하는 프레임에서만 호출하고, 나머지는 직전 결과를 재사용한다.
+            if frame_i % config.SIGNAL_INTERVAL == 0:
+                sig = voter.update(main_f, profile)
                 msg = voter.take_event(sig)
                 if msg:
                     ann.say("signal", msg)
@@ -147,7 +163,7 @@ def main():
             obstacles = []
             if detector and frame_i % config.DETECT_INTERVAL == 0:
                 obstacles = detector(lores_f, now)
-                detector.prune({o.track_id for o in obstacles})
+                detector.prune(now)
                 if obstacles:
                     got = obstacle_message(obstacles[0])
                     if got:
