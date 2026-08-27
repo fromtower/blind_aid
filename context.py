@@ -57,11 +57,21 @@ def profile_from_lux(lux: float) -> str:
 
 
 def profile_from_meta(meta: dict) -> str:
-    """조도센서 없을 때의 fallback.
+    """조도센서 없을 때의 fallback. 두 단계로 시도한다.
 
-    카메라가 어두운 장면에서 gain 을 올리는 성질을 역이용한다.
-    센서보다 부정확하지만 추가 부품 0개로 동작한다.
+    1순위: picamera2 가 주는 Lux 추정값 (OV5647 에서 제공 확인됨)
+           AWB/AE 가 내부적으로 계산한 값이라 gain 보다 훨씬 정확하다.
+           단, 절대 조도로 교정된 값은 아니므로 임계값은 실측으로 잡아야 한다.
+    2순위: AnalogueGain. 카메라가 어두운 장면에서 gain 을 올리는 성질을 역이용.
+           Lux 를 주지 않는 센서/펌웨어에서만 쓰인다.
     """
+    lux = meta.get("Lux")
+    if lux is not None:
+        try:
+            return profile_from_lux(float(lux))
+        except (TypeError, ValueError):
+            pass
+
     gain = float(meta.get("AnalogueGain", 1.0) or 1.0)
     if gain <= config.GAIN_DAY_MAX:
         return "day"
@@ -83,6 +93,12 @@ class ContextTracker:
 
     def update(self, meta: dict) -> str:
         lux = self.sensor.read() if self.sensor else None
+        if lux is None and meta.get("Lux") is not None:
+            try:
+                lux = float(meta["Lux"])
+                self._meta_lux = True
+            except (TypeError, ValueError):
+                lux = None
         self.last_lux = lux
         p = profile_from_lux(lux) if lux is not None else profile_from_meta(meta)
 
@@ -100,4 +116,6 @@ class ContextTracker:
 
     @property
     def source_name(self) -> str:
-        return "BH1750" if (self.sensor and self.sensor.ok) else "camera-gain"
+        if self.sensor and self.sensor.ok:
+            return "BH1750"
+        return "picamera2-Lux" if getattr(self, "_meta_lux", False) else "camera-gain"
