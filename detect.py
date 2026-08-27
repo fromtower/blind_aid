@@ -56,15 +56,17 @@ def side_of(cx_ratio: float) -> str:
 class _Track:
     """거리 시계열 스무딩 + 미분. ByteTrack 의 track_id 를 키로 유지."""
 
-    __slots__ = ("dists", "times")
+    __slots__ = ("dists", "times", "last_seen")
 
     def __init__(self):
         self.dists = deque(maxlen=config.DIST_SMOOTH_N)
         self.times = deque(maxlen=config.DIST_SMOOTH_N)
+        self.last_seen = 0.0
 
     def update(self, d: float, t: float) -> tuple[float, float]:
         self.dists.append(d)
         self.times.append(t)
+        self.last_seen = t
         smooth = float(np.median(self.dists))
         if len(self.dists) < 3:
             return smooth, 0.0
@@ -132,8 +134,13 @@ class ObstacleDetector:
         out.sort(key=lambda o: o.dist_m)
         return out
 
-    def prune(self, alive_ids: set[int]) -> None:
-        """사라진 트랙 정리. 장시간 구동 시 메모리 누수 방지."""
+    def prune(self, now: float, max_age_s: float = 2.0) -> None:
+        """오래 안 보인 트랙만 정리한다.
+
+        ★ 현재 프레임에 안 보인다고 바로 지우면 안 된다. 잠깐 가려졌다가
+          다시 나타나는 흔한 상황에서 거리 이력이 통째로 날아가고,
+          접근 속도가 0 으로 리셋되어 경고를 놓친다.
+        """
         for k in list(self.tracks):
-            if k not in alive_ids:
+            if now - self.tracks[k].last_seen > max_age_s:
                 del self.tracks[k]
