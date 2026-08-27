@@ -44,14 +44,15 @@ def make_pavement_frame(offset_ratio=0.0, brightness=1.0, with_block=True):
     return img
 
 
-def make_signal_frame(state=None):
+def make_signal_frame(state=None, x_ratio=0.5, y_ratio=0.16, r=16):
     img = np.full((H, W, 3), 55, np.uint8)             # 어두운 배경
     if state:
-        cx, cy = W // 2, int(H * 0.16)
+        cx, cy = int(W * x_ratio), int(H * y_ratio)
         color = (55, 60, 250) if state == "red" else (90, 245, 90)   # BGR
-        cv2.circle(img, (cx, cy), 16, color, -1)
+        cv2.circle(img, (cx, cy), r, color, -1)
     # 방해물: 밝은 사각 간판 (원형도 필터로 걸러져야 함)
-    cv2.rectangle(img, (60, 40), (190, 95), (240, 240, 240), -1)
+    # 위치는 아래 좌/우 치우침 테스트 지점과 겹치지 않게 잡았다.
+    cv2.rectangle(img, (300, 40), (430, 95), (240, 240, 240), -1)
     return img
 
 
@@ -88,6 +89,24 @@ check("녹색 단일 프레임 판정", st == "green", f"state={st} area={area}"
 
 st, _ = detect_signal_once(make_signal_frame(None))
 check("등 없음 + 사각 간판 배제", st == "none", f"state={st}")
+
+# ROI 확장 검증: 조준이 빗나가도 잡혀야 한다 (웨어러블이라 흔들림)
+for xr, tag in ((0.14, "화면 좌측 14%"), (0.86, "화면 우측 86%")):
+    st, ar = detect_signal_once(make_signal_frame("red", x_ratio=xr))
+    check(f"{tag} 신호등 검출", st == "red", f"state={st} area={ar}")
+
+st, _ = detect_signal_once(make_signal_frame("green", y_ratio=0.45))
+check("화면 아래쪽(45%) 신호등 검출", st == "green", f"state={st}")
+
+# 중앙 선호: 가장자리 큰 등보다 중앙의 작은 등을 고른다
+both = make_signal_frame("green", x_ratio=0.5, r=14)
+cv2.circle(both, (int(W * 0.10), int(H * 0.16)), 20, (55, 60, 250), -1)  # 가장자리 적색
+st, _ = detect_signal_once(both)
+check("중앙 선호 (가장자리 큰 등보다 중앙 작은 등)", st == "green", f"state={st}")
+
+# ROI 밖(하단)은 여전히 무시해야 한다 — 노면 반사·미등 오탐 방지
+st, _ = detect_signal_once(make_signal_frame("red", y_ratio=0.88))
+check("ROI 밖(하단 88%)은 무시", st == "none", f"state={st}")
 
 # 투표: 1프레임만으로는 확정 금지
 v = SignalVoter()
