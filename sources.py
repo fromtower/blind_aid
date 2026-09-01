@@ -96,11 +96,15 @@ class VideoSource:
         self.cap.release()
 
 
-def open_source(spec: str):
-    """spec 이 'pi' 면 PiCamera2, 그 외에는 파일 경로/웹캠 인덱스."""
+def open_source(spec: str, loop: bool = False):
+    """spec 이 'pi' 면 PiCamera2, 그 외에는 파일 경로/웹캠 인덱스.
+
+    loop 기본값은 False 다. 영상 파일로 한 번 돌려보고 결과를 확인하는 것이
+    일반적인 용법이고, 무한 반복은 --loop 로 명시할 때만 한다.
+    """
     if spec == "pi":
         return PiCameraSource()
-    return VideoSource(spec, loop=True)
+    return VideoSource(spec, loop=loop)
 
 
 def crop_ratio(img: np.ndarray, roi) -> tuple[np.ndarray, tuple[int, int]]:

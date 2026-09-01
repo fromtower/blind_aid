@@ -48,7 +48,8 @@ def obstacle_message(obs) -> tuple[str, str] | None:
     return None
 
 
-def draw_debug(frame, obstacles, pave, sig, profile, fps, view_w=960):
+def draw_debug(frame, obstacles, pave, sig, profile, fps, view_w=960,
+               signal_boxes=None, show_signal_roi=False):
     """디버그 오버레이.
 
     ★ 주의: obstacle.box 는 lores(416) 좌표계이고 frame 은 main(1920x1080)이다.
@@ -72,10 +73,22 @@ def draw_debug(frame, obstacles, pave, sig, profile, fps, view_w=960):
         cv2.putText(vis, f"{o.label} {o.dist_m:.1f}m {o.speed_mps:+.1f}",
                     (x1, max(14, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
 
-    # 신호등 ROI 박스 / 점자블록 ROI 경계선
-    x0, y0, x1_, y1_ = config.SIGNAL_ROI
-    cv2.rectangle(vis, (int(x0 * vw), int(y0 * vh)), (int(x1_ * vw), int(y1_ * vh)),
-                  (255, 180, 0), 1)
+    # 신호등: 모델 백엔드는 ROI 가 없으므로 검출 박스를 그대로 그린다.
+    # 규칙 백엔드일 때만 ROI 사각형을 표시한다.
+    if signal_boxes:
+        sx2, sy2 = vw / float(w), vh / float(h)
+        for b in signal_boxes:
+            cv2.rectangle(vis, (int(b.x0 * sx2), int(b.y0 * sy2)),
+                          (int(b.x1 * sx2), int(b.y1 * sy2)), (255, 180, 0), 2)
+            cv2.putText(vis, f"{b.conf:.2f} h{b.h}",
+                        (int(b.x0 * sx2), max(12, int(b.y0 * sy2) - 4)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 180, 0), 1)
+    elif show_signal_roi:
+        x0, y0, x1_, y1_ = config.SIGNAL_ROI
+        cv2.rectangle(vis, (int(x0 * vw), int(y0 * vh)),
+                      (int(x1_ * vw), int(y1_ * vh)), (255, 180, 0), 1)
+
+    # 점자블록 ROI 경계선 (색상 기반 유지)
     cv2.line(vis, (0, int(config.PAVE_ROI_TOP * vh)),
              (vw, int(config.PAVE_ROI_TOP * vh)), (0, 255, 255), 1)
 
@@ -100,16 +113,45 @@ def main():
     ap.add_argument("--no-detect", action="store_true", help="YOLO 끄고 색 로직만")
     ap.add_argument("--view", action="store_true", help="디버그 창 표시")
     ap.add_argument("--focal", type=float, default=None, help="FOCAL_PX 덮어쓰기")
+    ap.add_argument("--signal-backend", default=config.SIGNAL_BACKEND,
+                    choices=["model", "rule"],
+                    help="model=YOLO+CNN(ROI 미사용) | rule=색공간 규칙(SIGNAL_ROI 사용)")
+    ap.add_argument("--signal-conf", type=float, default=None,
+                    help="검출 신뢰도 임계값 덮어쓰기 (기본 config.SIGNAL_DET_CONF)")
+    ap.add_argument("--save", default=None, metavar="OUT.mp4",
+                    help="디버그 오버레이를 영상으로 저장. 헤드리스(SSH) 환경에서 --view 대신")
+    ap.add_argument("--loop", action="store_true", help="영상 파일을 무한 반복")
+    ap.add_argument("--max-frames", type=int, default=0, help="N 프레임 처리 후 종료 (0=끝까지)")
     args = ap.parse_args()
+
+    if args.signal_conf is not None:
+        config.SIGNAL_DET_CONF = args.signal_conf
 
     if args.focal:
         config.FOCAL_PX = args.focal
 
-    src = open_source(args.source)
+    src = open_source(args.source, loop=args.loop)
     ann = Announcer(backend=args.tts)
     ctx = ContextTracker(LuxSensor())
-    voter = SignalVoter()
     pave_tracker = PavementTracker()
+
+    # ── 신호등 백엔드 ──
+    # model: 전체 프레임에서 YOLO 가 보행등 함체를 찾고, 그 박스만 CNN 이 판정한다.
+    #        ROI 제한이 없다. 위치가 아니라 형태로 찾기 때문이다.
+    # rule : 기존 색공간 규칙(SIGNAL_ROI 크롭 + LAB a*). 모델이 안 뜰 때의 대비책.
+    signal_detector = None
+    if args.signal_backend == "model":
+        try:
+            from signal_model import ModelSignalDetector
+            signal_detector = ModelSignalDetector()
+            print(f"[신호등] 모델 백엔드 conf={config.SIGNAL_DET_CONF} "
+                  f"imgsz={config.SIGNAL_DET_IMGSZ} (ROI 미사용)")
+        except Exception as e:
+            print(f"[경고] 모델 신호등 로드 실패 → 규칙 기반으로 전환합니다: {e}")
+            args.signal_backend = "rule"
+    if args.signal_backend == "rule":
+        print(f"[신호등] 규칙 백엔드 (레거시). SIGNAL_ROI={config.SIGNAL_ROI}")
+    voter = SignalVoter(detector=signal_detector)
 
     detector = None
     if not args.no_detect:
@@ -123,10 +165,14 @@ def main():
           f"lux={ctx.source_name} tts={args.tts}")
     ann.say("status", "시스템을 시작합니다", force=True)
 
+    writer = None
+    overlay = args.view or bool(args.save)
+
     frame_i = 0
     fps, t_prev = 0.0, time.monotonic()
     last_profile = None
     sig = SignalResult("unknown", False, False, 0)
+    signal_boxes: list = []
 
     try:
         for main_f, lores_f, meta in src:
@@ -152,6 +198,9 @@ def main():
                 msg = voter.take_event(sig)
                 if msg:
                     ann.say("signal", msg)
+                # 디버그 표시용. 판정과 무관하므로 --view 일 때만 다시 뽑는다.
+                if args.view and signal_detector is not None:
+                    signal_boxes = signal_detector.detect(main_f)
 
             # ── 점자블록 (MAIN 하단 ROI) ──
             pave = detect_pavement(main_f, profile)
@@ -169,17 +218,35 @@ def main():
                     if got:
                         ann.say(*got)
 
-            if args.view:
-                cv2.imshow("blindnav", draw_debug(main_f, obstacles, pave, sig,
-                                                  profile, fps))
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
+            if overlay:
+                vis = draw_debug(
+                    main_f, obstacles, pave, sig, profile, fps,
+                    signal_boxes=signal_boxes,
+                    show_signal_roi=(args.signal_backend == "rule"))
+                if args.save:
+                    if writer is None:
+                        h_v, w_v = vis.shape[:2]
+                        writer = cv2.VideoWriter(
+                            args.save, cv2.VideoWriter_fourcc(*"mp4v"),
+                            config.TARGET_FPS, (w_v, h_v))
+                        print(f"[저장] {args.save} ({w_v}x{h_v})")
+                    writer.write(vis)
+                if args.view:
+                    cv2.imshow("blindnav", vis)
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        break
+
+            if args.max_frames and frame_i >= args.max_frames:
+                break
 
     except KeyboardInterrupt:
         pass
     finally:
         src.close()
         ann.close()
+        if writer is not None:
+            writer.release()
+            print(f"[저장 완료] {args.save}")
         if args.view:
             cv2.destroyAllWindows()
         print(f"\n[종료] 총 {frame_i} 프레임, 평균 {fps:.1f} fps")
