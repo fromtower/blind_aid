@@ -104,11 +104,17 @@ def detect_signal_once(main_bgr: np.ndarray) -> tuple[str, int]:
 
 
 class SignalVoter:
-    """다프레임 투표 + 점멸 검출 + 상태 변화 이벤트."""
+    """다프레임 투표 + 점멸 검출 + 상태 변화 이벤트.
 
-    def __init__(self):
+    detector 는 (main_bgr) -> (state, area_px) 인 호출가능 객체면 무엇이든 된다.
+    기본값은 이 파일의 색공간 규칙이고, signal_model.ModelSignalDetector 를
+    넣으면 YOLO+CNN 경로가 된다. 투표·점멸 로직은 백엔드와 무관하게 공통이다.
+    """
+
+    def __init__(self, detector=None):
         self.window: deque[str] = deque(maxlen=config.SIGNAL_VOTE_N)
         self.confirmed = "unknown"
+        self.detector = detector if detector is not None else detect_signal_once
 
     def update(self, main_bgr: np.ndarray | None, profile: str) -> SignalResult:
         # 야간에는 아예 판정하지 않는다. 오판보다 "모름"이 안전하다.
@@ -118,7 +124,7 @@ class SignalVoter:
                 self.confirmed = "unknown"
             return SignalResult("unknown", False, False, 0)
 
-        st, area = detect_signal_once(main_bgr)
+        st, area = self.detector(main_bgr)
         self.window.append(st)
 
         cnt = Counter(self.window)

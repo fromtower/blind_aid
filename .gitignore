@@ -1,0 +1,99 @@
+# ============================================================
+#  blindnav — 형상관리 제외 목록
+#
+#  원칙: 소스와 "재생성 불가능한 산출물"만 추적한다.
+#        데이터셋·학습 로그·변환 결과·묶음은 전부 제외한다.
+# ============================================================
+
+# ── 프로젝트 지침 (로컬 전용) ────────────────────────────────
+CLAUDE.md
+
+# ── 데이터셋 ────────────────────────────────────────────────
+# AI Hub 056 원본 tar 약 18GB, 가공본 4GB. 절대 커밋 금지.
+Training/
+Validation/
+crops/
+dataset_det/
+dataset_det_1024/
+dataset_det_1024.zip
+
+# ── 학습 산출물 ─────────────────────────────────────────────
+runs/
+logs/
+wandb/
+*.csv.bak
+
+# ── 모델 가중치 ─────────────────────────────────────────────
+# 추적하는 것 (재생성에 18GB 데이터 + GPU 수 시간이 필요):
+#     MCN.pt              보행등 검출기  (5.5MB)
+#     models/signal_cls.pt 상태 분류기    (6.2MB)
+#
+# 아래는 전부 위 두 파일에서 몇 초 만에 다시 만들 수 있으므로 제외한다.
+#     NCNN  : yolo export format=ncnn
+#     ONNX  : python export_signal_cls.py
+
+# 사전학습 가중치 (ultralytics 가 런타임에 자동 다운로드)
+yolo11n.pt
+yolo*.pt
+weights/
+
+# 변환 산출물
+*_ncnn_model/
+*.onnx
+models/*.json
+models/*.onnx
+
+# 학습 중간 체크포인트
+*.ckpt
+last.pt
+best.pt
+
+# ── 배포 묶음 ───────────────────────────────────────────────
+deploy_rpi/
+deploy_rpi.zip
+
+# ── 테스트 자원 ─────────────────────────────────────────────
+# 영상은 크고 재생성이 안 되지만 저장소에 넣을 것은 아니다.
+*.mp4
+*.avi
+*.mov
+_smoke.mp4
+_out.mp4
+
+# ── 미사용 참고 코드 ────────────────────────────────────────
+# NIA MobileNetV2 차량 신호등 분류기. 보행등을 다루지 않아 사용하지 않기로 했다.
+# (crop_panel.py 가 type=="car" 만 크롭한다)
+trafficlight/
+
+# ── 파이썬 ──────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ── 에디터 / OS ─────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── 예외: 추적할 가중치 (위 규칙보다 우선) ──────────────────
+!MCN.pt
+!models/signal_cls.pt
+
+.ipynb
+README_RPI.md
